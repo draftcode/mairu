@@ -137,6 +137,8 @@ Mairu treats `auto` role as a special mode. It reads closest `.mairu.json` file 
 
 If it is read by a filesystem, Mairu prompts user to trust that file for the first time. And prompt appears again if the file content has been changed.
 
+Trust is shared across git worktrees; a `.mairu.json` in a linked worktree is trusted when the equivalent path in the repository's main checkout has been trusted with the same content. Set `MAIRU_NO_WORKTREE_TRUST=1` to prompt separately for each worktree.
+
 We recommend use `auto` role by default. This allows using per-project AWS role seamlessly, securely and concurrently! It would also be convenient to have `alias ae="mairu exec auto "` in your shell profile.
 
 ### Role chaining

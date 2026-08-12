@@ -55,12 +55,18 @@ impl Auto {
     }
 
     pub fn digest_sha384(&self) -> [u8; 48] {
+        self.digest_sha384_as(&self.path)
+    }
+
+    /// Computes the digest as if this configuration were located at the given path. The path is
+    /// bound into the digest, so trusting the same content at another path yields another digest.
+    fn digest_sha384_as(&self, path: &std::path::Path) -> [u8; 48] {
         use sha2::Digest;
 
         #[cfg(unix)]
         let path = {
             use std::os::unix::ffi::OsStrExt;
-            self.path.as_os_str().as_bytes()
+            path.as_os_str().as_bytes()
         };
 
         let hash = sha2::Sha384::new()
@@ -74,31 +80,33 @@ impl Auto {
     }
 
     pub fn trust_path(&self) -> std::path::PathBuf {
-        use base64::Engine;
-        use sha2::Digest;
-
-        #[cfg(unix)]
-        let path = {
-            use std::os::unix::ffi::OsStrExt;
-            self.path.as_os_str().as_bytes()
-        };
-
-        let hash = sha2::Sha256::new()
-            .chain_update(b"v0.trust_path\0\0")
-            .chain_update(path)
-            .finalize();
-        let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash);
-
-        crate::config::trust_dir().join(format!("trust.{key}.json"))
+        trust_path_of(&self.path)
     }
 
     pub async fn find_trust(&self) -> Option<Trustability> {
-        let path = self.trust_path();
-        let data = match tokio::fs::read(&path).await {
+        let own = self.find_trust_at(&self.path).await;
+        if matches!(own, Some(Trustability::Matched(_))) {
+            return own;
+        }
+
+        let Some(equivalent) = self.main_checkout_equivalent_path().await else {
+            return own;
+        };
+        tracing::debug!(auto_path = ?self.path, main_checkout_path = ?equivalent, "Looking up trust of the main checkout equivalent");
+        match self.find_trust_at(&equivalent).await {
+            inherited @ Some(Trustability::Matched(_)) => inherited,
+            _ => own,
+        }
+    }
+
+    /// Reads and verifies the trust recorded for the given path against this configuration.
+    async fn find_trust_at(&self, path: &std::path::Path) -> Option<Trustability> {
+        let trust_path = trust_path_of(path);
+        let data = match tokio::fs::read(&trust_path).await {
             Ok(d) => d,
             Err(e) => {
                 if !matches!(e.kind(), std::io::ErrorKind::NotFound) {
-                    tracing::warn!(auto_path = ?self.path, trust_path = ?path, err = ?e, "Failed to read trust");
+                    tracing::warn!(auto_path = ?path, trust_path = ?trust_path, err = ?e, "Failed to read trust");
                 }
                 return None;
             }
@@ -106,12 +114,37 @@ impl Auto {
         let trust: Trust = match serde_json::from_slice(&data) {
             Ok(d) => d,
             Err(e) => {
-                tracing::warn!(auto_path = ?self.path, trust_path = ?path, err = ?e, "Failed to parse trust");
+                tracing::warn!(auto_path = ?path, trust_path = ?trust_path, err = ?e, "Failed to parse trust");
                 return None;
             }
         };
 
-        Some(Trustability::verify(self, trust))
+        Some(Trustability::verify_as(self, path, trust))
+    }
+
+    /// Path of an equivalent configuration file in the main checkout, when this configuration is in
+    /// a linked git worktree and worktree sharing is enabled.
+    async fn main_checkout_equivalent_path(&self) -> Option<std::path::PathBuf> {
+        if std::env::var_os("MAIRU_NO_WORKTREE_TRUST").is_some() {
+            return None;
+        }
+        let path = self.path.clone();
+        tokio::task::spawn_blocking(move || {
+            // Only the directory is resolved. Canonicalizing the file itself would follow a
+            // symlinked .mairu.json to wherever it points, while its trust is recorded under the
+            // path it is reached by.
+            let dir = match path.parent()?.canonicalize() {
+                Ok(dir) => dir,
+                Err(e) => {
+                    tracing::debug!(auto_path = ?path, err = ?e, "Failed to canonicalize path");
+                    return None;
+                }
+            };
+            crate::git::main_checkout_equivalent(&dir.join(path.file_name()?))
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     pub async fn mark_trust(&self) -> crate::Result<()> {
@@ -140,6 +173,25 @@ impl Auto {
         file.flush().await?;
         Ok(())
     }
+}
+
+fn trust_path_of(path: &std::path::Path) -> std::path::PathBuf {
+    use base64::Engine;
+    use sha2::Digest;
+
+    #[cfg(unix)]
+    let path = {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes()
+    };
+
+    let hash = sha2::Sha256::new()
+        .chain_update(b"v0.trust_path\0\0")
+        .chain_update(path)
+        .finalize();
+    let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash);
+
+    crate::config::trust_dir().join(format!("trust.{key}.json"))
 }
 
 async fn find_auto_file_path(
@@ -178,11 +230,17 @@ pub enum Trustability {
 
 impl Trustability {
     pub fn verify(auto: &Auto, trust: Trust) -> Self {
+        Self::verify_as(auto, &auto.path, trust)
+    }
+
+    /// Verifies against a trust that was recorded for the given path, which may differ from the
+    /// configuration's own path when the trust is inherited from the main checkout of a worktree.
+    fn verify_as(auto: &Auto, path: &std::path::Path, trust: Trust) -> Self {
         let matched = match trust.digest {
             TrustDigest::Sha384 { ref hash } => {
                 let hash_u8r: Result<&[u8; 48], _> = hash.as_slice().try_into();
                 if let Ok(hash_u8) = hash_u8r {
-                    &auto.digest_sha384() == hash_u8
+                    &auto.digest_sha384_as(path) == hash_u8
                 } else {
                     false
                 }
