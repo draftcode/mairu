@@ -2,7 +2,12 @@
 /// linked git worktree. Returns None when the path is not in a linked worktree, or when the
 /// equivalent path is the given path itself.
 pub fn main_checkout_equivalent(path: &std::path::Path) -> Option<std::path::PathBuf> {
-    for worktree_root in path.ancestors() {
+    let start = path.parent()?;
+    let start_device = device(start)?;
+    for worktree_root in start.ancestors() {
+        if device(worktree_root) != Some(start_device) {
+            return None;
+        }
         let dotgit = worktree_root.join(".git");
         if dotgit.is_dir() {
             return None;
@@ -15,6 +20,19 @@ pub fn main_checkout_equivalent(path: &std::path::Path) -> Option<std::path::Pat
         }
     }
     None
+}
+
+/// Device the given path lives on. The ancestor walk stops when this changes, so that a checkout
+/// mounted below an unrelated one does not reach the outer repository.
+#[cfg(unix)]
+fn device(path: &std::path::Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(std::fs::metadata(path).ok()?.dev())
+}
+
+#[cfg(not(unix))]
+fn device(path: &std::path::Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|_| 0)
 }
 
 fn main_checkout_root(dotgit_file: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -121,6 +139,7 @@ mod tests {
     fn maps_linked_worktree_to_main_checkout() {
         let root = scratch_dir("linked");
         let (main_root, worktree_root) = fake_worktree(&root);
+        std::fs::create_dir_all(worktree_root.join("sub")).unwrap();
 
         assert_eq!(
             super::main_checkout_equivalent(&worktree_root.join("sub").join(".mairu.json")),
