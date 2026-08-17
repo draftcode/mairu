@@ -1,5 +1,9 @@
 ## [not yet released]
 
+### Enhancements
+
+- auto: Trust of `.mairu.json` is now shared across git worktrees. A configuration file in a linked worktree is trusted when the equivalent path in the repository's main checkout has been trusted with the same content. Set `MAIRU_NO_WORKTREE_TRUST=1` to opt out.
+
 ## 0.11.0
 
 ### Enhancements

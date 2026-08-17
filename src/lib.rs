@@ -4,6 +4,7 @@ pub use error::{Error, Result};
 pub mod ext_awssso;
 pub mod ext_axum;
 pub mod ext_oauth2;
+pub mod git;
 pub mod os;
 pub mod ppid;
 pub mod singleflight;
