@@ -3,6 +3,24 @@ pub struct ListSessionsArgs {
     /// Show time in UTC instead of local time
     #[arg(long, default_value_t = false)]
     pub utc: bool,
+
+    #[arg(long, short = 'o', value_enum, default_value_t = ListSessionsFormat::Text)]
+    output: ListSessionsFormat,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+enum ListSessionsFormat {
+    Text,
+    Json,
+}
+
+#[derive(serde::Serialize)]
+struct JsonSession<'a> {
+    id: u32,
+    server_id: &'a str,
+    server_url: &'a str,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    refreshable: bool,
 }
 
 #[tokio::main]
@@ -13,8 +31,29 @@ pub async fn run(args: &ListSessionsArgs) -> Result<(), anyhow::Error> {
         .await?
         .into_inner();
 
-    for session in list.sessions.iter() {
-        print_session(session, args.utc);
+    match args.output {
+        ListSessionsFormat::Text => {
+            for session in list.sessions.iter() {
+                print_session(session, args.utc);
+            }
+        }
+        ListSessionsFormat::Json => {
+            let sessions: Vec<_> = list
+                .sessions
+                .iter()
+                .map(|s| JsonSession {
+                    id: s.id,
+                    server_id: &s.server_id,
+                    server_url: &s.server_url,
+                    expires_at: s.expiration().ok().flatten(),
+                    refreshable: s.refreshable,
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "sessions": sessions }))?
+            );
+        }
     }
 
     Ok(())
