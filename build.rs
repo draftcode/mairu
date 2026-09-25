@@ -13,5 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "#[derive(serde::Serialize)]",
         )
         .compile_protos(&["proto/mairu.proto"], &["proto"])?;
+
+    shadow_rs::ShadowBuilder::builder().build()?;
     Ok(())
 }

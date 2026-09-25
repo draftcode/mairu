@@ -1,5 +1,16 @@
+shadow_rs::shadow!(build);
+
+#[allow(clippy::const_is_empty)]
+const VERSION: &str = if build::SHORT_COMMIT.is_empty() {
+    build::PKG_VERSION
+} else if build::GIT_CLEAN {
+    shadow_rs::formatcp!("{} ({})", build::PKG_VERSION, build::SHORT_COMMIT)
+} else {
+    shadow_rs::formatcp!("{} ({}-dirty)", build::PKG_VERSION, build::SHORT_COMMIT)
+};
+
 #[derive(clap::Parser)]
-#[clap(author, version, long_about = None)]
+#[clap(author, version = VERSION, long_about = None)]
 #[clap(about = "Mairu: on-memory AWS credentials agent")]
 #[clap(propagate_version = true)]
 struct Cli {
